@@ -16,9 +16,9 @@ const char compile_date[] = __DATE__ " " __TIME__;
 //#define WIFI_SSID "" //enter your WIFI SSID
 //#define WIFI_PASSWORD "" //enter your WIFI Password
 //#define MQTT_SERVER "" // Enter your MQTT server address or IP.
-//#define MQTT_DEVICE "" // Enter your MQTT device
 //#define MQTT_USER "" //enter your MQTT username
 //#define MQTT_PASSWORD "" //enter your password
+#define MQTT_DEVICE "garage-double" // Enter your MQTT device
 #define MQTT_PORT 1883 // Enter your MQTT server port.
 #define MQTT_SOCKET_TIMEOUT 120
 #define FW_UPDATE_INTERVAL_SEC 24*3600
@@ -30,7 +30,7 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define RELAY_DELAY 600
 #define LIGHT_ON_THRESHOLD 900
 #define UPDATE_SERVER "http://192.168.100.15/firmware/"
-#define FIRMWARE_VERSION "-1.14"
+#define FIRMWARE_VERSION "-1.15"
 //#define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
