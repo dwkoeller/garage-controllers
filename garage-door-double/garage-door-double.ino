@@ -35,7 +35,7 @@ const char compile_date[] = __DATE__ " " __TIME__;
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
 //#define MQTT_TEMPERATURE_PUB "sensor/garage-double/temperature"
-#define MQTT_DOOR_TOPIC "sensor/garage-double/state"
+#define MQTT_DOOR_POSITION_TEXT_TOPIC "sensor/garage-double/positiontext"
 #define MQTT_DOOR_BUTTON_TOPIC "sensor/garage-double/action"
 #define MQTT_DOOR_POSITION_TOPIC "sensor/garage-double/position"
 #define MQTT_LIGHT_TOPIC "sensor/garage-double/light-state"
@@ -265,8 +265,8 @@ void checkDoorState() {
 
   if (doorPositionUpdate) {
     doorPositionUpdate = false;  
-    client.publish(MQTT_DOOR_TOPIC, door_state, true);
-    client.publish(MQTT_DOOR_POSITION_TOPIC, door_position.c_str(), true);
+    client.publish(MQTT_DOOR_POSITION_TOPIC, door_state, true);
+    client.publish(MQTT_DOOR_POSITION_TEXT_TOPIC, door_position.c_str(), true);
     Serial.print("Door Position: ");
     Serial.println(door_state);
   }
