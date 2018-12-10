@@ -24,13 +24,13 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define FW_UPDATE_INTERVAL_SEC 24*3600
 #define TEMP_UPDATE_INTERVAL_SEC 6
 #define WATCHDOG_UPDATE_INTERVAL_SEC 1
-#define WATCHDOG_RESET_INTERVAL_SEC 30
+#define WATCHDOG_RESET_INTERVAL_SEC 120
 #define DOOR_UPDATE_INTERVAL_MS 1000
 #define DOOR_OPEN_TIME_SEC 15
 #define RELAY_DELAY 600
 #define LIGHT_ON_THRESHOLD 900
 #define UPDATE_SERVER "http://192.168.100.15/firmware/"
-#define FIRMWARE_VERSION "-1.15"
+#define FIRMWARE_VERSION "-1.18"
 //#define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
@@ -44,6 +44,8 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define MQTT_VERSION_PUB "sensor/garage-double/version"
 #define MQTT_COMPILE_PUB "sensor/garage-double/compile"
 #define MQTT_GARAGE_SUB "sensor/garage-double/#"
+#define MQTT_HEARTBEAT_SUB "heartbeat/#"
+#define MQTT_HEARTBEAT_TOPIC "heartbeat"
 
 //Define the pins
 #define DOOR_RELAY_PIN 14      // D5
@@ -178,7 +180,6 @@ void loop() {
   }
   
   client.loop(); //the mqtt function that processes MQTT messages
-  watchDogCount = 0;
 }
  
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -207,6 +208,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
       digitalWrite(LIGHT_RELAY_PIN, LOW);
     }
   }  
+  if (strTopic == MQTT_HEARTBEAT_TOPIC) {
+    watchDogCount = 0;
+  }
 }
 
 void setup_wifi() {
@@ -293,6 +297,7 @@ void reconnect() {
   if (client.connect(MQTT_DEVICE, MQTT_USER, MQTT_PASSWORD)) {
     Serial.println("connected");
     client.subscribe(MQTT_GARAGE_SUB);
+    client.subscribe(MQTT_HEARTBEAT_SUB);
     String firmwareVer = String("Firmware Version: ") + String(FIRMWARE_VERSION);
     String compileDate = String("Build Date: ") + String(compile_date);
     client.publish(MQTT_VERSION_PUB, firmwareVer.c_str(), true);
@@ -405,4 +410,3 @@ void my_delay(unsigned long ms) {
     }
   }
 }
-
