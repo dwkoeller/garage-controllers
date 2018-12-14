@@ -25,12 +25,12 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define TEMP_UPDATE_INTERVAL_SEC 6
 #define WATCHDOG_UPDATE_INTERVAL_SEC 1
 #define WATCHDOG_RESET_INTERVAL_SEC 120
-#define DOOR_UPDATE_INTERVAL_MS 1000
+#define DOOR_UPDATE_INTERVAL_MS 5000
 #define DOOR_OPEN_TIME_SEC 15
 #define RELAY_DELAY 600
 #define LIGHT_ON_THRESHOLD 900
 #define UPDATE_SERVER "http://192.168.100.15/firmware/"
-#define FIRMWARE_VERSION "-1.18"
+#define FIRMWARE_VERSION "-1.19"
 //#define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
