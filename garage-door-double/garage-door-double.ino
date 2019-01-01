@@ -23,35 +23,43 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define MQTT_SOCKET_TIMEOUT 120
 #define FW_UPDATE_INTERVAL_SEC 24*3600
 #define TEMP_UPDATE_INTERVAL_SEC 6
-#define WATCHDOG_UPDATE_INTERVAL_SEC 1
-#define WATCHDOG_RESET_INTERVAL_SEC 120
 #define DOOR_UPDATE_INTERVAL_MS 5000
+#define MOTION_UPDATE_INTERVAL_MS 250
+#define MOTION_TIMER_SEC 60
 #define DOOR_OPEN_TIME_SEC 15
 #define RELAY_DELAY 600
-#define LIGHT_ON_THRESHOLD 900
+#define LIGHT_ON_THRESHOLD 800
 #define UPDATE_SERVER "http://192.168.100.15/firmware/"
-#define FIRMWARE_VERSION "-1.19"
-//#define ENABLE_TEMP_MONITOR 1
+#define FIRMWARE_VERSION "-1.27"
+#define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
-//#define MQTT_TEMPERATURE_PUB "sensor/garage-double/temperature"
+#define MQTT_TEMPERATURE_PUB "sensor/garage-double/temperature"
+#define MQTT_MOTION_PUB "sensor/garage-double/motion"
+#define MQTT_TIMER_PUB "sensor/garage-double/timer"
+#define MQTT_VERSION_PUB "sensor/garage-double/version"
+#define MQTT_COMPILE_PUB "sensor/garage-double/compile"
+#define MQTT_HEARTBEAT_PUB "sensor/garage-double/heartbeat"
 #define MQTT_DOOR_POSITION_TEXT_TOPIC "sensor/garage-double/positiontext"
 #define MQTT_DOOR_BUTTON_TOPIC "sensor/garage-double/action"
 #define MQTT_DOOR_POSITION_TOPIC "sensor/garage-double/position"
 #define MQTT_LIGHT_TOPIC "sensor/garage-double/light-state"
 #define MQTT_LIGHT_BUTTON_TOPIC "sensor/garage-double/light-action"
 #define MQTT_LIGHT_INTENSITY_TOPIC "sensor/garage-double/light-intensity"
-#define MQTT_VERSION_PUB "sensor/garage-double/version"
-#define MQTT_COMPILE_PUB "sensor/garage-double/compile"
+#define MQTT_DAYLIGHT_TOPIC "sensor/daylight"
+#define MQTT_HEARTBEAT_TOPIC "heartbeat"
 #define MQTT_GARAGE_SUB "sensor/garage-double/#"
 #define MQTT_HEARTBEAT_SUB "heartbeat/#"
-#define MQTT_HEARTBEAT_TOPIC "heartbeat"
+#define MQTT_DAYLIGHT_SUB "sensor/daylight/#"
 
 //Define the pins
+// D1 and D2 - SDA/SCL
 #define DOOR_RELAY_PIN 14      // D5
 #define LIGHT_RELAY_PIN 15     // D8
 #define DOOR_OPEN_PIN 13       // D7
 #define DOOR_CLOSE_PIN 12      // D6
+#define WATCHDOG_PIN 0         // D3
+#define MOTION_PIN 16          // D0
 #define LIGHT_DETECTION_PIN A0
 
 #define RELAY_ON 0
@@ -64,16 +72,16 @@ const char compile_date[] = __DATE__ " " __TIME__;
 
 int analogValue = 0;
 
-volatile int watchDogCount = 0;
+int timerCounter = 0;
 
-// Create event timers to update NTP, temperature and invert OLED disply
-Ticker ticker_fw, ticker_watchdog, tickerDoorState;
+Ticker tickerFirmware, tickerDoorState;
+Ticker tickerMotionCheck, tickerMotionTimer;
 
 #ifdef ENABLE_TEMP_MONITOR
-Ticker ticker_temp;
-Adafruit_BMP280 bme; // I2C
+Ticker tickerTemp;
+Adafruit_BMP280 bme;
 
-float f,f2;//Added %2 for error correction
+float f,f2;
 float temp_offset = 0;
 
 bool readyForTempUpdate = false;
@@ -81,8 +89,10 @@ bool readyForTempUpdate = false;
 
 bool readyForFwUpdate = false;
 bool readyForDoorUpdate = false;
-
+bool readyForMotionUpdate = false;
+bool killTimer = false;
 bool doorPositionUpdate = false;
+bool daylightStatus = true;
   
 WiFiClient espClient;
  
@@ -91,6 +101,7 @@ PubSubClient client(espClient);
  
 //Setup Variables
 String switch1;
+String daylight;
 String strTopic;
 String strPayload;
 char* door_state = "UNDEFINED";
@@ -105,8 +116,12 @@ void setup() {
   digitalWrite(LIGHT_RELAY_PIN, LOW);
   pinMode(DOOR_OPEN_PIN, INPUT_PULLUP);
   pinMode(DOOR_CLOSE_PIN, INPUT_PULLUP);
+  pinMode(WATCHDOG_PIN, OUTPUT);
+  digitalWrite(WATCHDOG_PIN, LOW);
+  pinMode(MOTION_PIN, INPUT);
  
   Serial.begin(115200);
+  resetWatchdog();
 
 #ifdef ENABLE_TEMP_MONITOR
   if (!bme.begin()) {  
@@ -122,12 +137,12 @@ void setup() {
 
 
 #ifdef ENABLE_TEMP_MONITOR
-  ticker_temp.attach_ms(TEMP_UPDATE_INTERVAL_SEC * 1000, tempTicker); // Run a 1 second interval Ticker
+  tickerTemp.attach_ms(TEMP_UPDATE_INTERVAL_SEC * 1000, tempTickerFunc);
 #endif
 
-  ticker_fw.attach_ms(FW_UPDATE_INTERVAL_SEC * 1000, fwTicker); // Run a 24 hour interval Ticker
-  ticker_watchdog.attach_ms(WATCHDOG_UPDATE_INTERVAL_SEC * 1000, watchdogTicker); // Run a 24 hour interval Ticker
-  tickerDoorState.attach_ms(DOOR_UPDATE_INTERVAL_MS, doorTicker); // Run a 24 hour interval Ticker
+  tickerFirmware.attach_ms(FW_UPDATE_INTERVAL_SEC * 1000, firmwareTickerFunc);
+  tickerDoorState.attach_ms(DOOR_UPDATE_INTERVAL_MS, doorStateTickerFunc);
+  tickerMotionCheck.attach_ms(MOTION_UPDATE_INTERVAL_MS, motionCheckTickerFunc);
 
   checkForUpdates();
 }
@@ -178,6 +193,33 @@ void loop() {
     checkDoorState();
     checkLightState();
   }
+
+  if(killTimer) {
+    killTimer = false;
+    tickerMotionTimer.detach();
+    toggleOpenerLight();
+    timerCounter = 0;
+    client.publish(MQTT_TIMER_PUB, "Light Timer killed");
+  }
+
+  if(readyForMotionUpdate) {
+    readyForMotionUpdate = false;
+    if ((daylightStatus == false) && (timerCounter == 0)) {
+      if (digitalRead(MOTION_PIN) == 1) {
+        Serial.println("Motion Detected");
+        client.publish(MQTT_MOTION_PUB, "motion", true);
+        if(timerCounter == 0) {
+          client.publish(MQTT_TIMER_PUB, "Light Timer Started");
+          timerCounter = MOTION_TIMER_SEC;
+          tickerMotionTimer.attach_ms(1000, motionTimerFunc);
+          toggleOpenerLight();
+        }
+        else {
+          timerCounter = MOTION_TIMER_SEC;
+        }
+      }
+    }
+  }
   
   client.loop(); //the mqtt function that processes MQTT messages
 }
@@ -209,7 +251,21 @@ void callback(char* topic, byte* payload, unsigned int length) {
     }
   }  
   if (strTopic == MQTT_HEARTBEAT_TOPIC) {
-    watchDogCount = 0;
+    Serial.println("Heartbeat received");
+    resetWatchdog();
+    client.publish(MQTT_HEARTBEAT_PUB, "Heartbeat Received");
+  }
+  if (strTopic == MQTT_DAYLIGHT_TOPIC) {
+    Serial.println("Daylight Status Received");
+    daylight = String((char*)payload);
+    if (daylight == "TRUE") {
+      daylightStatus = true;
+      client.publish(MQTT_HEARTBEAT_PUB, "Sunrise Mode");
+    }
+    else {
+      daylightStatus = false;
+      client.publish(MQTT_HEARTBEAT_PUB, "Sunset Mode");
+    }
   }
 }
 
@@ -268,7 +324,7 @@ void checkDoorState() {
   }
 
   if (doorPositionUpdate) {
-    doorPositionUpdate = false;  
+    doorPositionUpdate = false;
     client.publish(MQTT_DOOR_POSITION_TOPIC, door_state, true);
     client.publish(MQTT_DOOR_POSITION_TEXT_TOPIC, door_position.c_str(), true);
     Serial.print("Door Position: ");
@@ -298,7 +354,8 @@ void reconnect() {
     Serial.println("connected");
     client.subscribe(MQTT_GARAGE_SUB);
     client.subscribe(MQTT_HEARTBEAT_SUB);
-    String firmwareVer = String("Firmware Version: ") + String(FIRMWARE_VERSION);
+    client.subscribe(MQTT_DAYLIGHT_SUB);
+    String firmwareVer = String(MQTT_DEVICE) + String(": ") + String(FIRMWARE_VERSION);
     String compileDate = String("Build Date: ") + String(compile_date);
     client.publish(MQTT_VERSION_PUB, firmwareVer.c_str(), true);
     client.publish(MQTT_COMPILE_PUB, compileDate.c_str(), true);
@@ -313,28 +370,39 @@ void reconnect() {
 
 #ifdef ENABLE_TEMP_MONITOR
 // Temperature update ticker
-void tempTicker() {
+void tempTickerFunc() {
   readyForTempUpdate = true;
 }
 #endif
 
 // FW update ticker
-void fwTicker() {
+void firmwareTickerFunc() {
   readyForFwUpdate = true;
 }
 
-// Watchdog update ticker
-void watchdogTicker() {
-  watchDogCount++;
-  if(watchDogCount >= WATCHDOG_RESET_INTERVAL_SEC) {
-    Serial.println("Reset system");
-    ESP.restart();  
-  }
+// Door update ticker
+void doorStateTickerFunc() {
+  readyForDoorUpdate = true;
 }
 
-// Door update ticker
-void doorTicker() {
-  readyForDoorUpdate = true;
+void motionCheckTickerFunc() {
+  readyForMotionUpdate = true;
+}
+
+void motionTimerFunc() {
+  timerCounter--;
+  if(timerCounter == 0) {
+    killTimer = true;
+  }
+  Serial.println(timerCounter);
+  client.publish(MQTT_TIMER_PUB, String(timerCounter).c_str());
+}
+
+void toggleOpenerLight() {
+  Serial.println("Motion Toggle ON");
+  digitalWrite(LIGHT_RELAY_PIN, HIGH);
+  my_delay(RELAY_DELAY);
+  digitalWrite(LIGHT_RELAY_PIN, LOW);  
 }
 
 String WiFi_macAddressOf(IPAddress aIp) {
@@ -409,4 +477,10 @@ void my_delay(unsigned long ms) {
       start += 1000;
     }
   }
+}
+
+void resetWatchdog() {
+  digitalWrite(WATCHDOG_PIN, HIGH);
+  my_delay(20);
+  digitalWrite(WATCHDOG_PIN, LOW);
 }
