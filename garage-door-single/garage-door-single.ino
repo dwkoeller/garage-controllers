@@ -30,7 +30,7 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define RELAY_DELAY 600
 #define LIGHT_ON_THRESHOLD 800
 #define UPDATE_SERVER "http://192.168.100.15/firmware/"
-#define FIRMWARE_VERSION "-1.27"
+#define FIRMWARE_VERSION "-1.28"
 #define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
@@ -285,11 +285,6 @@ void setup_wifi() {
     my_delay(250);
     Serial.print(".");
     count++;
-    if(count > 50) {
-      WiFiManager wifiManager;
-      wifiManager.resetSettings();
-      wifiManager.autoConnect();
-    }
   }
 
   Serial.println("");
