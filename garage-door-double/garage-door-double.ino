@@ -1,15 +1,4 @@
-#include <ESP8266SSDP.h>
-#include <ESP8266WiFi.h>
-#include <WiFiManager.h>
-#include <PubSubClient.h>
-#include <Ticker.h>
-#include <ESP8266HTTPClient.h>
-#include <ESP8266httpUpdate.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BMP280.h>
-#include "credentials.h" // Place credentials for wifi and mqtt in this file
- 
-//This can be used to output the date the code was compiled
+ //This can be used to output the date the code was compiled
 const char compile_date[] = __DATE__ " " __TIME__;
 
 /************ WIFI, OTA and MQTT INFORMATION (CHANGE THESE FOR YOUR SETUP) ******************/
@@ -19,7 +8,7 @@ const char compile_date[] = __DATE__ " " __TIME__;
 //#define MQTT_USER "" //enter your MQTT username
 //#define MQTT_PASSWORD "" //enter your password
 #define MQTT_DEVICE "garage-double" // Enter your MQTT device
-#define MQTT_PORT 1883 // Enter your MQTT server port.
+#define MQTT_SSL_PORT 8883 // Enter your MQTT server port.
 #define MQTT_SOCKET_TIMEOUT 120
 #define FW_UPDATE_INTERVAL_SEC 24*3600
 #define TEMP_UPDATE_INTERVAL_SEC 6
@@ -30,7 +19,7 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define RELAY_DELAY 600
 #define LIGHT_ON_THRESHOLD 800
 #define UPDATE_SERVER "http://192.168.100.15/firmware/"
-#define FIRMWARE_VERSION "-1.28"
+#define FIRMWARE_VERSION "-1.30"
 #define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
@@ -70,12 +59,29 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define BMP_MOSI 11 
 #define BMP_CS 10
 
-int analogValue = 0;
+#include <ESP8266SSDP.h>
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+#include <Ticker.h>
+#include <ESP8266HTTPClient.h>
+#include <ESP8266httpUpdate.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BMP280.h>
+#include "credentials.h" // Place credentials for wifi and mqtt in this file
+#include "certificates.h" // Place certificates for mqtt in this file
 
+Ticker ticker_fw, tickerDoorState;
+Ticker tickerMotionCheck, tickerMotionTimer;
+bool readyForFwUpdate = false;
+
+WiFiClientSecure espClient;
+PubSubClient client(espClient);
+
+#include "common.h"
+
+int analogValue = 0;
 int timerCounter = 0;
 
-Ticker tickerFirmware, tickerDoorState;
-Ticker tickerMotionCheck, tickerMotionTimer;
 
 #ifdef ENABLE_TEMP_MONITOR
 Ticker tickerTemp;
@@ -87,19 +93,12 @@ float temp_offset = 0;
 bool readyForTempUpdate = false;
 #endif
 
-bool readyForFwUpdate = false;
 bool readyForDoorUpdate = false;
 bool readyForMotionUpdate = false;
 bool killTimer = false;
 bool doorPositionUpdate = false;
 bool daylightStatus = true;
-  
-WiFiClient espClient;
- 
-//Initialize MQTT
-PubSubClient client(espClient);
- 
-//Setup Variables
+
 String switch1;
 String daylight;
 String strTopic;
@@ -132,7 +131,7 @@ void setup() {
 
   setup_wifi();
 
-  client.setServer(MQTT_SERVER, MQTT_PORT); //1883 is the port number you have forwared for mqtt messages. You will need to change this if you've used a different port 
+  client.setServer(MQTT_SERVER, MQTT_SSL_PORT); //8883 is the port number you have forwared for mqtt messages. You will need to change this if you've used a different port 
   client.setCallback(callback); //callback is the function that gets called for a topic sub
 
 
@@ -140,7 +139,6 @@ void setup() {
   tickerTemp.attach_ms(TEMP_UPDATE_INTERVAL_SEC * 1000, tempTickerFunc);
 #endif
 
-  tickerFirmware.attach_ms(FW_UPDATE_INTERVAL_SEC * 1000, firmwareTickerFunc);
   tickerDoorState.attach_ms(DOOR_UPDATE_INTERVAL_MS, doorStateTickerFunc);
   tickerMotionCheck.attach_ms(MOTION_UPDATE_INTERVAL_MS, motionCheckTickerFunc);
 
@@ -269,31 +267,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
-void setup_wifi() {
-  int count = 0;
-  my_delay(50);
-
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(WIFI_SSID);
-  
-  WiFi.mode(WIFI_STA);
-  WiFi.hostname(MQTT_DEVICE);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    my_delay(250);
-    Serial.print(".");
-    count++;
-  }
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-  
-}
-
 void checkDoorState() {
   //Checks if the door state has changed, and MQTT pub the change
   last_state = door_state; //get previous state of door
@@ -341,27 +314,6 @@ void checkLightState() {
   }
   client.publish(MQTT_LIGHT_INTENSITY_TOPIC, String(analogValue).c_str(), true);
 }
- 
-void reconnect() {
-  //Reconnect to Wifi and to MQTT. If Wifi is already connected, then autoconnect doesn't do anything.
-  Serial.print("Attempting MQTT connection...");
-  if (client.connect(MQTT_DEVICE, MQTT_USER, MQTT_PASSWORD)) {
-    Serial.println("connected");
-    client.subscribe(MQTT_GARAGE_SUB);
-    client.subscribe(MQTT_HEARTBEAT_SUB);
-    client.subscribe(MQTT_DAYLIGHT_SUB);
-    String firmwareVer = String(MQTT_DEVICE) + String(": ") + String(FIRMWARE_VERSION);
-    String compileDate = String("Build Date: ") + String(compile_date);
-    client.publish(MQTT_VERSION_PUB, firmwareVer.c_str(), true);
-    client.publish(MQTT_COMPILE_PUB, compileDate.c_str(), true);
-  } else {
-    Serial.print("failed, rc=");
-    Serial.print(client.state());
-    Serial.println(" try again in 5 seconds");
-    // Wait 5 seconds before retrying
-    my_delay(5000);
-  }
-}
 
 #ifdef ENABLE_TEMP_MONITOR
 // Temperature update ticker
@@ -369,11 +321,6 @@ void tempTickerFunc() {
   readyForTempUpdate = true;
 }
 #endif
-
-// FW update ticker
-void firmwareTickerFunc() {
-  readyForFwUpdate = true;
-}
 
 // Door update ticker
 void doorStateTickerFunc() {
@@ -398,84 +345,4 @@ void toggleOpenerLight() {
   digitalWrite(LIGHT_RELAY_PIN, HIGH);
   my_delay(RELAY_DELAY);
   digitalWrite(LIGHT_RELAY_PIN, LOW);  
-}
-
-String WiFi_macAddressOf(IPAddress aIp) {
-  if (aIp == WiFi.localIP())
-    return WiFi.macAddress();
-
-  if (aIp == WiFi.softAPIP())
-    return WiFi.softAPmacAddress();
-
-  return String("00-00-00-00-00-00");
-}
-
-void checkForUpdates() {
-
-  String clientMAC = WiFi_macAddressOf(espClient.localIP());
-
-  Serial.print("MAC: ");
-  Serial.println(clientMAC);
-  clientMAC.replace(":", "-");
-  String filename = clientMAC.substring(9);
-  String firmware_URL = String(UPDATE_SERVER) + filename + String(FIRMWARE_VERSION);
-  String current_firmware_version_URL = String(UPDATE_SERVER) + filename + String("-current_version");
-
-  HTTPClient http;
-
-  http.begin(current_firmware_version_URL);
-  int httpCode = http.GET();
-  
-  if ( httpCode == 200 ) {
-
-    String newFirmwareVersion = http.getString();
-    newFirmwareVersion.trim();
-    
-    Serial.print( "Current firmware version: " );
-    Serial.println( FIRMWARE_VERSION );
-    Serial.print( "Available firmware version: " );
-    Serial.println( newFirmwareVersion );
-    
-    if(newFirmwareVersion.substring(1).toFloat() > String(FIRMWARE_VERSION).substring(1).toFloat()) {
-      Serial.println( "Preparing to update" );
-      String new_firmware_URL = String(UPDATE_SERVER) + filename + newFirmwareVersion + ".bin";
-      Serial.println(new_firmware_URL);
-      t_httpUpdate_return ret = ESPhttpUpdate.update( new_firmware_URL );
-
-      switch(ret) {
-        case HTTP_UPDATE_FAILED:
-          Serial.printf("HTTP_UPDATE_FAILD Error (%d): %s", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
-          break;
-
-        case HTTP_UPDATE_NO_UPDATES:
-          Serial.println("HTTP_UPDATE_NO_UPDATES");
-         break;
-      }
-    }
-    else {
-      Serial.println("Already on latest firmware");  
-    }
-  }
-  else {
-    Serial.print("GET RC: ");
-    Serial.println(httpCode);
-  }
-}
-
-void my_delay(unsigned long ms) {
-  uint32_t start = micros();
-
-  while (ms > 0) {
-    yield();
-    while ( ms > 0 && (micros() - start) >= 1000) {
-      ms--;
-      start += 1000;
-    }
-  }
-}
-
-void resetWatchdog() {
-  digitalWrite(WATCHDOG_PIN, HIGH);
-  my_delay(20);
-  digitalWrite(WATCHDOG_PIN, LOW);
 }
