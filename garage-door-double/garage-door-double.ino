@@ -17,9 +17,9 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define MOTION_TIMER_SEC 60
 #define DOOR_OPEN_TIME_SEC 15
 #define RELAY_DELAY 600
-#define LIGHT_ON_THRESHOLD 800
+#define LIGHT_ON_THRESHOLD 750
 #define UPDATE_SERVER "http://192.168.100.15/firmware/"
-#define FIRMWARE_VERSION "-1.30"
+#define FIRMWARE_VERSION "-1.33"
 #define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
@@ -152,6 +152,9 @@ void loop() {
   //If MQTT client can't connect to broker, then reconnect
   if (!client.connected()) {
     reconnect();
+    client.subscribe(MQTT_GARAGE_SUB);
+    client.subscribe(MQTT_HEARTBEAT_SUB);
+    client.subscribe(MQTT_DAYLIGHT_SUB);    
   }
 
   if(readyForFwUpdate) {
