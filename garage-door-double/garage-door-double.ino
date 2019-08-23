@@ -8,7 +8,7 @@ const char compile_date[] = __DATE__ " " __TIME__;
 //#define MQTT_USER "" //enter your MQTT username
 //#define MQTT_PASSWORD "" //enter your password
 #define MQTT_DEVICE "garage-double" // Enter your MQTT device
-#define MQTT_SSL_PORT 1883 // Enter your MQTT server port.
+#define MQTT_SSL_PORT 8883 // Enter your MQTT server port.
 #define MQTT_SOCKET_TIMEOUT 120
 #define FW_UPDATE_INTERVAL_SEC 24*3600
 #define TEMP_UPDATE_INTERVAL_SEC 6
@@ -19,7 +19,7 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define RELAY_DELAY 600
 #define LIGHT_ON_THRESHOLD 750
 #define UPDATE_SERVER "http://192.168.100.15/firmware/"
-#define FIRMWARE_VERSION "-1.35"
+#define FIRMWARE_VERSION "-1.40"
 #define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
@@ -68,14 +68,13 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP280.h>
 #include "credentials.h" // Place credentials for wifi and mqtt in this file
-//#include "certificates.h" // Place certificates for mqtt in this file
+#include "certificates.h" // Place certificates for mqtt in this file
 
 Ticker ticker_fw, tickerDoorState;
 Ticker tickerMotionCheck, tickerMotionTimer;
 bool readyForFwUpdate = false;
 
-//WiFiClientSecure espClient;
-WiFiClient espClient;
+WiFiClientSecure espClient;
 PubSubClient client(espClient);
 
 #include "common.h"
