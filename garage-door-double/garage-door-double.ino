@@ -1,4 +1,4 @@
- //This can be used to output the date the code was compiled
+//This can be used to output the date the code was compiled
 const char compile_date[] = __DATE__ " " __TIME__;
 
 /************ WIFI, OTA and MQTT INFORMATION (CHANGE THESE FOR YOUR SETUP) ******************/
@@ -13,33 +13,35 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define FW_UPDATE_INTERVAL_SEC 24*3600
 #define TEMP_UPDATE_INTERVAL_SEC 6
 #define DOOR_UPDATE_INTERVAL_MS 5000
-#define MOTION_UPDATE_INTERVAL_MS 250
-#define MOTION_TIMER_SEC 60
+#define MOTION_UPDATE_INTERVAL_MS 50
 #define DOOR_OPEN_TIME_SEC 15
 #define RELAY_DELAY 600
-#define LIGHT_ON_THRESHOLD 750
+#define LIGHT_ON_THRESHOLD 75
 #define UPDATE_SERVER "http://192.168.100.15/firmware/"
-#define FIRMWARE_VERSION "-1.40"
+#define FIRMWARE_VERSION "-1.74"
 #define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
-#define MQTT_TEMPERATURE_PUB "sensor/garage-double/temperature"
-#define MQTT_MOTION_PUB "sensor/garage-double/motion"
 #define MQTT_TIMER_PUB "sensor/garage-double/timer"
-#define MQTT_VERSION_PUB "sensor/garage-double/version"
-#define MQTT_COMPILE_PUB "sensor/garage-double/compile"
-#define MQTT_HEARTBEAT_PUB "sensor/garage-double/heartbeat"
 #define MQTT_DOOR_POSITION_TEXT_TOPIC "sensor/garage-double/positiontext"
 #define MQTT_DOOR_BUTTON_TOPIC "sensor/garage-double/action"
 #define MQTT_DOOR_POSITION_TOPIC "sensor/garage-double/position"
 #define MQTT_LIGHT_TOPIC "sensor/garage-double/light-state"
 #define MQTT_LIGHT_BUTTON_TOPIC "sensor/garage-double/light-action"
-#define MQTT_LIGHT_INTENSITY_TOPIC "sensor/garage-double/light-intensity"
 #define MQTT_DAYLIGHT_TOPIC "sensor/daylight"
 #define MQTT_HEARTBEAT_TOPIC "heartbeat"
 #define MQTT_GARAGE_SUB "sensor/garage-double/#"
 #define MQTT_HEARTBEAT_SUB "heartbeat/#"
-#define MQTT_DAYLIGHT_SUB "sensor/daylight/#"
+#define MQTT_DISCOVERY_BINARY_SENSOR_PREFIX  "homeassistant/binary_sensor/"
+#define MQTT_DISCOVERY_SENSOR_PREFIX  "homeassistant/sensor/"
+#define HA_TELEMETRY                         "ha"
+
+#define TEMPERATURE "garage_double_temperature"
+#define TEMPERATURE_NAME "Garage Double Temperature"
+#define LIGHT_INTENSITY "garage_double_light_intensity"
+#define LIGHT_INTENSITY_NAME "Garage Double Light Intensity"
+#define MOTION "garage_double_motion"
+#define MOTION_NAME "Garage Double Door Motion"
 
 //Define the pins
 // D1 and D2 - SDA/SCL
@@ -53,10 +55,10 @@ const char compile_date[] = __DATE__ " " __TIME__;
 
 #define RELAY_ON 0
 #define RELAY_OFF 1
- 
+
 #define BMP_SCK 13
 #define BMP_MISO 12
-#define BMP_MOSI 11 
+#define BMP_MOSI 11
 #define BMP_CS 10
 
 #include <ESP8266SSDP.h>
@@ -82,13 +84,12 @@ PubSubClient client(espClient);
 int analogValue = 0;
 int timerCounter = 0;
 
-
 #ifdef ENABLE_TEMP_MONITOR
 Ticker tickerTemp;
 Adafruit_BMP280 bme;
 
-float f,f2;
-float temp_offset = 0;
+float f, f2;
+float temp_offset = 0.5;
 
 bool readyForTempUpdate = false;
 #endif
@@ -98,15 +99,17 @@ bool readyForMotionUpdate = false;
 bool killTimer = false;
 bool doorPositionUpdate = false;
 bool daylightStatus = true;
+bool registered = false;
+bool motion = false;
+bool lastMotion = false;
 
 String switch1;
-String daylight;
 String strTopic;
 String strPayload;
 char* door_state = "UNDEFINED";
 int doorStateCount = 0;
 char* last_state = "";
- 
+
 void setup() {
   //Set Relay(output) and Door(input) pins
   pinMode(DOOR_RELAY_PIN, OUTPUT);
@@ -118,12 +121,12 @@ void setup() {
   pinMode(WATCHDOG_PIN, OUTPUT);
   digitalWrite(WATCHDOG_PIN, LOW);
   pinMode(MOTION_PIN, INPUT);
- 
+
   Serial.begin(115200);
   resetWatchdog();
 
 #ifdef ENABLE_TEMP_MONITOR
-  if (!bme.begin()) {  
+  if (!bme.begin()) {
     Serial.println("Could not find a valid BMP280 sensor, check wiring!");
     while (1);
   }
@@ -131,7 +134,7 @@ void setup() {
 
   setup_wifi();
 
-  client.setServer(MQTT_SERVER, MQTT_SSL_PORT); //8883 is the port number you have forwared for mqtt messages. You will need to change this if you've used a different port 
+  client.setServer(MQTT_SERVER, MQTT_SSL_PORT); //8883 is the port number you have forwared for mqtt messages. You will need to change this if you've used a different port
   client.setCallback(callback); //callback is the function that gets called for a topic sub
 
 
@@ -148,54 +151,51 @@ void setup() {
 void loop() {
   char strCh[10];
   String str;
-  
+
   //If MQTT client can't connect to broker, then reconnect
   if (!client.connected()) {
     reconnect();
     client.subscribe(MQTT_GARAGE_SUB);
     client.subscribe(MQTT_HEARTBEAT_SUB);
-    client.subscribe(MQTT_DAYLIGHT_SUB);    
   }
 
-  if(readyForFwUpdate) {
+  if (readyForFwUpdate) {
     readyForFwUpdate = false;
     checkForUpdates();
   }
 
 #ifdef ENABLE_TEMP_MONITOR
-  if(readyForTempUpdate) {
-      readyForTempUpdate = false;
-      // Read temperature as Celcius
-      f = bme.readTemperature();
-      f = (f * 9 / 5) + 32;
+  if (readyForTempUpdate) {
+    readyForTempUpdate = false;
+    // Read temperature as Celcius
+    f = bme.readTemperature();
+    f = (f * 9 / 5) + 32;
 
-      // Check if any reads failed and exit early (to try again).
-      if (isnan(f)) {
-        Serial.println("Failed to read from DHT sensor!");
-        //h=t=f=-1;
-        f=f2;
-      }
-      else { //add offsets, if any
-        f = f + temp_offset;
-        f2=f;
-        Serial.print("Temperature: ");
-        Serial.print(f,1);
-        Serial.print(" *F\n");
-        str = String(f,1);
-        str.toCharArray(strCh,9);
-        client.publish(MQTT_TEMPERATURE_PUB, strCh, true);
-
-      }
+    // Check if any reads failed and exit early (to try again).
+    if (isnan(f)) {
+      Serial.println("Failed to read from DHT sensor!");
+      f = f2;
+    }
+    else { //add offsets, if any
+      f = f + temp_offset;
+      f2 = f;
+      Serial.print("Temperature: ");
+      Serial.print(f, 1);
+      Serial.print(" *F\n");
+      str = String(f, 1);
+      str.toCharArray(strCh, 9);
+      updateSensor(TEMPERATURE, strCh);
+    }
   }
 #endif
 
-  if(readyForDoorUpdate) {
+  if (readyForDoorUpdate) {
     readyForDoorUpdate = false;
     checkDoorState();
     checkLightState();
   }
 
-  if(killTimer) {
+  if (killTimer) {
     killTimer = false;
     tickerMotionTimer.detach();
     toggleOpenerLight();
@@ -203,33 +203,39 @@ void loop() {
     client.publish(MQTT_TIMER_PUB, "Light Timer killed");
   }
 
-  if(readyForMotionUpdate) {
+  if (readyForMotionUpdate) {
     readyForMotionUpdate = false;
-
-    bool motion = false;
-    if (digitalRead(MOTION_PIN) == 1) {
+    
+    if (digitalRead(MOTION_PIN) == HIGH) {
       motion = true;
-      client.publish(MQTT_MOTION_PUB, "motion", "true");
+    }
+    else {
+      motion = false;
     }
 
-    if ((daylightStatus == false) && (timerCounter == 0)) {
+    if (motion != lastMotion) {
+      lastMotion = motion;
       if (motion == true) {
-        if(timerCounter == 0) {
-          client.publish(MQTT_TIMER_PUB, "Light Timer Started");
-          timerCounter = MOTION_TIMER_SEC;
-          tickerMotionTimer.attach_ms(1000, motionTimerFunc);
-          toggleOpenerLight();
-        }
-        else {
-          timerCounter = MOTION_TIMER_SEC;
-        }
+        updateBinarySensor(MOTION, "ON");
+      }
+      else {
+        updateBinarySensor(MOTION, "OFF");
       }
     }
-  }
-  
+  }  
+
   client.loop(); //the mqtt function that processes MQTT messages
+  if (! registered) {
+    registerTelemetry();
+    updateTelemetry("Unknown");
+    createSensors(TEMPERATURE, TEMPERATURE_NAME, "temperature", "°F");
+    createSensors(LIGHT_INTENSITY, LIGHT_INTENSITY_NAME, "illuminace", "%");
+    createBinarySensors(MOTION, MOTION_NAME, "motion");
+    registered = true;
+  }
+
 }
- 
+
 void callback(char* topic, byte* payload, unsigned int length) {
   //if the 'garage/button' topic has a payload "OPEN", then 'click' the relay
   payload[length] = '\0';
@@ -255,23 +261,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
       my_delay(RELAY_DELAY);
       digitalWrite(LIGHT_RELAY_PIN, LOW);
     }
-  }  
-  if (strTopic == MQTT_HEARTBEAT_TOPIC) {
-    Serial.println("Heartbeat received");
-    resetWatchdog();
-    client.publish(MQTT_HEARTBEAT_PUB, "Heartbeat Received");
   }
-  if (strTopic == MQTT_DAYLIGHT_TOPIC) {
-    Serial.println("Daylight Status Received");
-    daylight = String((char*)payload);
-    if (daylight == "TRUE") {
-      daylightStatus = true;
-      client.publish(MQTT_HEARTBEAT_PUB, "Sunrise Mode");
-    }
-    else {
-      daylightStatus = false;
-      client.publish(MQTT_HEARTBEAT_PUB, "Sunset Mode");
-    }
+  if (strTopic == MQTT_HEARTBEAT_TOPIC) {
+    resetWatchdog();
+    updateTelemetry(String((char*)payload));
   }
 }
 
@@ -283,20 +276,20 @@ void checkDoorState() {
   if (digitalRead(DOOR_CLOSE_PIN) == 0) {
     door_state = "0";
     doorPositionUpdate = true;
-    doorStateCount = 0; 
+    doorStateCount = 0;
     door_position = "Closed";
   }
   else if (digitalRead(DOOR_OPEN_PIN) == 0) {
     door_state = "100";
     doorPositionUpdate = true;
     doorStateCount = 0;
-    door_position = "Open"; 
-  }  
+    door_position = "Open";
+  }
   else if (doorStateCount > DOOR_OPEN_TIME_SEC) {
     door_state = "50";
     doorStateCount = 0;
     doorPositionUpdate = true;
-    door_position = "Partially Open"; 
+    door_position = "Partially Open";
   }
 
   if (doorPositionUpdate) {
@@ -317,10 +310,10 @@ void checkLightState() {
     Serial.println("Light: ON");
   }
   else {
-    client.publish(MQTT_LIGHT_TOPIC, "OFF", true);    
+    client.publish(MQTT_LIGHT_TOPIC, "OFF", true);
     Serial.println("Light: OFF");
   }
-  client.publish(MQTT_LIGHT_INTENSITY_TOPIC, String(analogValue).c_str(), true);
+  updateSensor(LIGHT_INTENSITY, String(analogValue / 10).c_str());
 }
 
 #ifdef ENABLE_TEMP_MONITOR
@@ -341,7 +334,7 @@ void motionCheckTickerFunc() {
 
 void motionTimerFunc() {
   timerCounter--;
-  if(timerCounter == 0) {
+  if (timerCounter == 0) {
     killTimer = true;
   }
   Serial.println(timerCounter);
@@ -352,5 +345,56 @@ void toggleOpenerLight() {
   Serial.println("Motion Toggle ON");
   digitalWrite(LIGHT_RELAY_PIN, HIGH);
   my_delay(RELAY_DELAY);
-  digitalWrite(LIGHT_RELAY_PIN, LOW);  
+  digitalWrite(LIGHT_RELAY_PIN, LOW);
+}
+
+void createSensors(String sensor, String sensor_name, String device_class, String unit) {
+  String topic = String(MQTT_DISCOVERY_SENSOR_PREFIX) + sensor + "/config";
+  String message = String("{\"name\": \"") + sensor_name +
+                   String("\", \"unit_of_measurement\": \"") + unit +
+                   String("\", \"state_topic\": \"") + String(MQTT_DISCOVERY_SENSOR_PREFIX) + sensor +
+                   String("/state\", \"device_class\": \"" + device_class + "\"}");
+  Serial.print(F("MQTT - "));
+  Serial.print(topic);
+  Serial.print(F(" : "));
+  Serial.println(message.c_str());
+
+  client.publish(topic.c_str(), message.c_str(), true);
+
+}
+
+void updateSensor(String sensor, String state) {
+  String topic = String(MQTT_DISCOVERY_SENSOR_PREFIX) + sensor + "/state";
+
+  Serial.print(F("MQTT - "));
+  Serial.print(topic);
+  Serial.print(F(" : "));
+  Serial.println(state);
+  client.publish(topic.c_str(), state.c_str(), true);
+
+}
+
+void createBinarySensors(String sensor, String sensor_name, String device_class) {
+  String topic = String(MQTT_DISCOVERY_BINARY_SENSOR_PREFIX) + sensor + "/config";
+  String message = String("{\"name\": \"") + sensor_name +
+                   String("\", \"state_topic\": \"") + String(MQTT_DISCOVERY_BINARY_SENSOR_PREFIX) + sensor +
+                   String("/state\", \"device_class\": \"" + device_class + "\"}");
+  Serial.print(F("MQTT - "));
+  Serial.print(topic);
+  Serial.print(F(" : "));
+  Serial.println(message.c_str());
+
+  client.publish(topic.c_str(), message.c_str(), true);
+
+}
+
+void updateBinarySensor(String sensor, String state) {
+  String topic = String(MQTT_DISCOVERY_BINARY_SENSOR_PREFIX) + sensor + "/state";
+
+  Serial.print(F("MQTT - "));
+  Serial.print(topic);
+  Serial.print(F(" : "));
+  Serial.println(state);
+  client.publish(topic.c_str(), state.c_str(), true);
+
 }
