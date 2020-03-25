@@ -18,7 +18,7 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define RELAY_DELAY 600
 #define LIGHT_ON_THRESHOLD 75
 #define UPDATE_SERVER "http://192.168.100.15/firmware/"
-#define FIRMWARE_VERSION "-1.74"
+#define FIRMWARE_VERSION "-1.76"
 #define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
@@ -26,14 +26,12 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define MQTT_DOOR_POSITION_TEXT_TOPIC "sensor/garage-double/positiontext"
 #define MQTT_DOOR_BUTTON_TOPIC "sensor/garage-double/action"
 #define MQTT_DOOR_POSITION_TOPIC "sensor/garage-double/position"
-#define MQTT_LIGHT_TOPIC "sensor/garage-double/light-state"
-#define MQTT_LIGHT_BUTTON_TOPIC "sensor/garage-double/light-action"
-#define MQTT_DAYLIGHT_TOPIC "sensor/daylight"
 #define MQTT_HEARTBEAT_TOPIC "heartbeat"
 #define MQTT_GARAGE_SUB "sensor/garage-double/#"
 #define MQTT_HEARTBEAT_SUB "heartbeat/#"
 #define MQTT_DISCOVERY_BINARY_SENSOR_PREFIX  "homeassistant/binary_sensor/"
 #define MQTT_DISCOVERY_SENSOR_PREFIX  "homeassistant/sensor/"
+#define MQTT_DISCOVERY_LIGHT_PREFIX  "homeassistant/light/"
 #define HA_TELEMETRY                         "ha"
 
 #define TEMPERATURE "garage_double_temperature"
@@ -42,6 +40,10 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define LIGHT_INTENSITY_NAME "Garage Double Light Intensity"
 #define MOTION "garage_double_motion"
 #define MOTION_NAME "Garage Double Door Motion"
+#define LIGHT "garage_double_light"
+#define LIGHT_NAME "Garage Double Light"
+#define COVER "garage_double_door"
+#define COVER_NAME "Garage Double Door"
 
 //Define the pins
 // D1 and D2 - SDA/SCL
@@ -110,6 +112,9 @@ char* door_state = "UNDEFINED";
 int doorStateCount = 0;
 char* last_state = "";
 
+String lightStateTopic = String(MQTT_DISCOVERY_LIGHT_PREFIX) + LIGHT + "/state";
+String ligthCommandTopic = String(MQTT_DISCOVERY_LIGHT_PREFIX) + LIGHT + "/command";
+
 void setup() {
   //Set Relay(output) and Door(input) pins
   pinMode(DOOR_RELAY_PIN, OUTPUT);
@@ -157,6 +162,7 @@ void loop() {
     reconnect();
     client.subscribe(MQTT_GARAGE_SUB);
     client.subscribe(MQTT_HEARTBEAT_SUB);
+    client.subscribe(ligthCommandTopic.c_str());
   }
 
   if (readyForFwUpdate) {
@@ -231,6 +237,7 @@ void loop() {
     createSensors(TEMPERATURE, TEMPERATURE_NAME, "temperature", "°F");
     createSensors(LIGHT_INTENSITY, LIGHT_INTENSITY_NAME, "illuminace", "%");
     createBinarySensors(MOTION, MOTION_NAME, "motion");
+    createLight(LIGHT, LIGHT_NAME);
     registered = true;
   }
 
@@ -251,7 +258,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
       digitalWrite(DOOR_RELAY_PIN, LOW);
     }
   }
-  if (strTopic == MQTT_LIGHT_BUTTON_TOPIC) {
+  if (strTopic == ligthCommandTopic) {
     switch1 = String((char*)payload);
     Serial.println(switch1);
     if ((switch1 == "ON") || (switch1 == "OFF")) {
@@ -306,11 +313,11 @@ void checkLightState() {
   Serial.print("Analog Value: ");
   Serial.println(analogValue);
   if (analogValue > LIGHT_ON_THRESHOLD) {
-    client.publish(MQTT_LIGHT_TOPIC, "ON", true);
+    updateLight(LIGHT, "ON");
     Serial.println("Light: ON");
   }
   else {
-    client.publish(MQTT_LIGHT_TOPIC, "OFF", true);
+    updateLight(LIGHT, "OFF");
     Serial.println("Light: OFF");
   }
   updateSensor(LIGHT_INTENSITY, String(analogValue / 10).c_str());
@@ -390,6 +397,34 @@ void createBinarySensors(String sensor, String sensor_name, String device_class)
 
 void updateBinarySensor(String sensor, String state) {
   String topic = String(MQTT_DISCOVERY_BINARY_SENSOR_PREFIX) + sensor + "/state";
+
+  Serial.print(F("MQTT - "));
+  Serial.print(topic);
+  Serial.print(F(" : "));
+  Serial.println(state);
+  client.publish(topic.c_str(), state.c_str(), true);
+
+}
+
+void createLight(String light, String light_name) {
+  String topic = String(MQTT_DISCOVERY_LIGHT_PREFIX) + light + "/config";
+  String message = String("{\"name\": \"") + light_name +
+                   String("\", \"retain\": \"true") +
+                   String("\", \"optimistic\": \"false") +
+                   String("\", \"command_topic\": \"") + String(MQTT_DISCOVERY_LIGHT_PREFIX) + light +
+                   String("/command\", \"state_topic\": \"") + String(MQTT_DISCOVERY_LIGHT_PREFIX) + light +
+                   String("/state\"}");
+  Serial.print(F("MQTT - "));
+  Serial.print(topic);
+  Serial.print(F(" : "));
+  Serial.println(message.c_str());
+
+  client.publish(topic.c_str(), message.c_str(), true);
+
+}
+
+void updateLight(String light, String state) {
+  String topic = String(MQTT_DISCOVERY_LIGHT_PREFIX) + light + "/state";
 
   Serial.print(F("MQTT - "));
   Serial.print(topic);
