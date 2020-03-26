@@ -12,32 +12,28 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define MQTT_SOCKET_TIMEOUT 120
 #define FW_UPDATE_INTERVAL_SEC 24*3600
 #define TEMP_UPDATE_INTERVAL_SEC 6
-#define DOOR_UPDATE_INTERVAL_MS 5000
+#define DOOR_UPDATE_INTERVAL_MS 500
 #define MOTION_UPDATE_INTERVAL_MS 50
 #define DOOR_OPEN_TIME_SEC 15
 #define RELAY_DELAY 600
 #define LIGHT_ON_THRESHOLD 75
 #define UPDATE_SERVER "http://192.168.100.15/firmware/"
-#define FIRMWARE_VERSION "-1.76"
+#define FIRMWARE_VERSION "-1.91"
 #define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
-#define MQTT_TIMER_PUB "sensor/garage-single/timer"
-#define MQTT_DOOR_POSITION_TEXT_TOPIC "sensor/garage-single/positiontext"
-#define MQTT_DOOR_BUTTON_TOPIC "sensor/garage-single/action"
-#define MQTT_DOOR_POSITION_TOPIC "sensor/garage-single/position"
+#define MQTT_TIMER_PUB "sensor/garage-double/timer"
 #define MQTT_HEARTBEAT_TOPIC "heartbeat"
 #define MQTT_GARAGE_SUB "sensor/garage-single/#"
 #define MQTT_HEARTBEAT_SUB "heartbeat/#"
 #define MQTT_DISCOVERY_BINARY_SENSOR_PREFIX  "homeassistant/binary_sensor/"
 #define MQTT_DISCOVERY_SENSOR_PREFIX  "homeassistant/sensor/"
 #define MQTT_DISCOVERY_LIGHT_PREFIX  "homeassistant/light/"
+#define MQTT_DISCOVERY_COVER_PREFIX  "homeassistant/cover/"
 #define HA_TELEMETRY                         "ha"
 
 #define TEMPERATURE "garage_single_temperature"
 #define TEMPERATURE_NAME "Garage Single Temperature"
-#define LIGHT_INTENSITY "garage_single_light_intensity"
-#define LIGHT_INTENSITY_NAME "Garage Single Light Intensity"
 #define MOTION "garage_single_motion"
 #define MOTION_NAME "Garage Single Door Motion"
 #define LIGHT "garage_single_light"
@@ -108,12 +104,15 @@ bool lastMotion = false;
 String switch1;
 String strTopic;
 String strPayload;
-char* door_state = "UNDEFINED";
 int doorStateCount = 0;
-char* last_state = "";
+String doorState = "";
+String lastDoorState = "";
+String lightState = "";
+String lastLightState = "";
 
 String lightStateTopic = String(MQTT_DISCOVERY_LIGHT_PREFIX) + LIGHT + "/state";
 String ligthCommandTopic = String(MQTT_DISCOVERY_LIGHT_PREFIX) + LIGHT + "/command";
+String coverCommandTopic = String(MQTT_DISCOVERY_COVER_PREFIX) + COVER + "/command";
 
 void setup() {
   //Set Relay(output) and Door(input) pins
@@ -163,6 +162,7 @@ void loop() {
     client.subscribe(MQTT_GARAGE_SUB);
     client.subscribe(MQTT_HEARTBEAT_SUB);
     client.subscribe(ligthCommandTopic.c_str());
+    client.subscribe(coverCommandTopic.c_str());
   }
 
   if (readyForFwUpdate) {
@@ -235,9 +235,9 @@ void loop() {
     registerTelemetry();
     updateTelemetry("Unknown");
     createSensors(TEMPERATURE, TEMPERATURE_NAME, "temperature", "°F");
-    createSensors(LIGHT_INTENSITY, LIGHT_INTENSITY_NAME, "illuminace", "%");
     createBinarySensors(MOTION, MOTION_NAME, "motion");
     createLight(LIGHT, LIGHT_NAME);
+    createCover(COVER, COVER_NAME);
     registered = true;
   }
 
@@ -247,12 +247,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
   //if the 'garage/button' topic has a payload "OPEN", then 'click' the relay
   payload[length] = '\0';
   strTopic = String((char*)topic);
-  if (strTopic == MQTT_DOOR_BUTTON_TOPIC) {
+  if (strTopic == coverCommandTopic) {
     switch1 = String((char*)payload);
-    Serial.println(switch1);
-    if (switch1 == "OPEN") {
+    if (switch1 == "open") {
       //'click' the relay
-      Serial.println("ON");
       digitalWrite(DOOR_RELAY_PIN, HIGH);
       my_delay(RELAY_DELAY);
       digitalWrite(DOOR_RELAY_PIN, LOW);
@@ -260,10 +258,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
   if (strTopic == ligthCommandTopic) {
     switch1 = String((char*)payload);
-    Serial.println(switch1);
     if ((switch1 == "ON") || (switch1 == "OFF")) {
       //'click' the relay
-      Serial.println("ON");
       digitalWrite(LIGHT_RELAY_PIN, HIGH);
       my_delay(RELAY_DELAY);
       digitalWrite(LIGHT_RELAY_PIN, LOW);
@@ -277,50 +273,38 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 void checkDoorState() {
   //Checks if the door state has changed, and MQTT pub the change
-  last_state = door_state; //get previous state of door
   doorStateCount++;
   String door_position;
   if (digitalRead(DOOR_CLOSE_PIN) == 0) {
-    door_state = "0";
-    doorPositionUpdate = true;
+    doorState = "0";
     doorStateCount = 0;
-    door_position = "Closed";
   }
   else if (digitalRead(DOOR_OPEN_PIN) == 0) {
-    door_state = "100";
-    doorPositionUpdate = true;
+    doorState = "100";
     doorStateCount = 0;
-    door_position = "Open";
   }
   else if (doorStateCount > DOOR_OPEN_TIME_SEC) {
-    door_state = "50";
+    doorState = "50";
     doorStateCount = 0;
-    doorPositionUpdate = true;
-    door_position = "Partially Open";
   }
-
-  if (doorPositionUpdate) {
-    doorPositionUpdate = false;
-    client.publish(MQTT_DOOR_POSITION_TOPIC, door_state, true);
-    client.publish(MQTT_DOOR_POSITION_TEXT_TOPIC, door_position.c_str(), true);
-    Serial.print("Door Position: ");
-    Serial.println(door_state);
+  if(doorState != lastDoorState) {
+    updateCover(COVER, doorState);
+    lastDoorState = doorState;
   }
 }
 
 void checkLightState() {
   analogValue = analogRead(LIGHT_DETECTION_PIN);
-  Serial.print("Analog Value: ");
-  Serial.println(analogValue);
   if (analogValue > LIGHT_ON_THRESHOLD) {
-    updateLight(LIGHT, "ON");
-    Serial.println("Light: ON");
+    lightState = "ON";
   }
   else {
-    updateLight(LIGHT, "OFF");
-    Serial.println("Light: OFF");
+    lightState = "OFF";
   }
-  updateSensor(LIGHT_INTENSITY, String(analogValue / 10).c_str());
+  if (lightState != lastLightState) {
+    updateLight(LIGHT, lightState);
+    lastLightState = lightState;
+  }
 }
 
 #ifdef ENABLE_TEMP_MONITOR
@@ -344,12 +328,10 @@ void motionTimerFunc() {
   if (timerCounter == 0) {
     killTimer = true;
   }
-  Serial.println(timerCounter);
   client.publish(MQTT_TIMER_PUB, String(timerCounter).c_str());
 }
 
 void toggleOpenerLight() {
-  Serial.println("Motion Toggle ON");
   digitalWrite(LIGHT_RELAY_PIN, HIGH);
   my_delay(RELAY_DELAY);
   digitalWrite(LIGHT_RELAY_PIN, LOW);
@@ -358,6 +340,7 @@ void toggleOpenerLight() {
 void createSensors(String sensor, String sensor_name, String device_class, String unit) {
   String topic = String(MQTT_DISCOVERY_SENSOR_PREFIX) + sensor + "/config";
   String message = String("{\"name\": \"") + sensor_name +
+                   String("\", \"unique_id\": \"") + sensor + getUUID() +
                    String("\", \"unit_of_measurement\": \"") + unit +
                    String("\", \"state_topic\": \"") + String(MQTT_DISCOVERY_SENSOR_PREFIX) + sensor +
                    String("/state\", \"device_class\": \"" + device_class + "\"}");
@@ -384,6 +367,7 @@ void updateSensor(String sensor, String state) {
 void createBinarySensors(String sensor, String sensor_name, String device_class) {
   String topic = String(MQTT_DISCOVERY_BINARY_SENSOR_PREFIX) + sensor + "/config";
   String message = String("{\"name\": \"") + sensor_name +
+                   String("\", \"unique_id\": \"") + sensor + getUUID() +
                    String("\", \"state_topic\": \"") + String(MQTT_DISCOVERY_BINARY_SENSOR_PREFIX) + sensor +
                    String("/state\", \"device_class\": \"" + device_class + "\"}");
   Serial.print(F("MQTT - "));
@@ -410,6 +394,7 @@ void createLight(String light, String light_name) {
   String topic = String(MQTT_DISCOVERY_LIGHT_PREFIX) + light + "/config";
   String message = String("{\"name\": \"") + light_name +
                    String("\", \"retain\": \"true") +
+                   String("\", \"unique_id\": \"") + light + getUUID() +
                    String("\", \"optimistic\": \"false") +
                    String("\", \"command_topic\": \"") + String(MQTT_DISCOVERY_LIGHT_PREFIX) + light +
                    String("/command\", \"state_topic\": \"") + String(MQTT_DISCOVERY_LIGHT_PREFIX) + light +
@@ -431,5 +416,38 @@ void updateLight(String light, String state) {
   Serial.print(F(" : "));
   Serial.println(state);
   client.publish(topic.c_str(), state.c_str(), true);
+
+}
+
+void createCover(String cover, String cover_name) {
+  String topic = String(MQTT_DISCOVERY_COVER_PREFIX) + cover + "/config";
+  String message = String("{\"name\": \"") + cover_name +
+                   String("\", \"retain\": \"false") +
+                   String("\", \"unique_id\": \"") + cover + getUUID() +
+                   String("\", \"optimistic\": \"false") +
+                   String("\", \"payload_close\": \"open") +
+                   String("\", \"payload_stop\": \"open") +
+                   String("\", \"payload_open\": \"open") +
+                   String("\", \"device_class\": \"garage") +
+                   String("\", \"command_topic\": \"") + String(MQTT_DISCOVERY_COVER_PREFIX) + cover +
+                   String("/command\", \"position_topic\": \"") + String(MQTT_DISCOVERY_COVER_PREFIX) + cover +
+                   String("/position\"}");
+  Serial.print(F("MQTT - "));
+  Serial.print(topic);
+  Serial.print(F(" : "));
+  Serial.println(message.c_str());
+
+  client.publish(topic.c_str(), message.c_str(), true);
+
+}
+
+void updateCover(String cover, String coverPosition) {
+  String topic = String(MQTT_DISCOVERY_COVER_PREFIX) + cover + "/position";
+
+  Serial.print(F("MQTT - "));
+  Serial.print(topic);
+  Serial.print(F(" : "));
+  Serial.println(coverPosition);
+  client.publish(topic.c_str(), coverPosition.c_str(), true);
 
 }
