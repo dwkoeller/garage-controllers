@@ -17,8 +17,7 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define DOOR_OPEN_TIME_SEC 15
 #define RELAY_DELAY 600
 #define LIGHT_ON_THRESHOLD 75
-#define UPDATE_SERVER "http://192.168.100.15/firmware/"
-#define FIRMWARE_VERSION "-1.91"
+#define FIRMWARE_VERSION "-2.00"
 #define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
@@ -26,6 +25,7 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define MQTT_HEARTBEAT_TOPIC "heartbeat"
 #define MQTT_GARAGE_SUB "sensor/garage-single/#"
 #define MQTT_HEARTBEAT_SUB "heartbeat/#"
+#define MQTT_UPDATE_REQUEST "update"
 #define MQTT_DISCOVERY_BINARY_SENSOR_PREFIX  "homeassistant/binary_sensor/"
 #define MQTT_DISCOVERY_SENSOR_PREFIX  "homeassistant/sensor/"
 #define MQTT_DISCOVERY_LIGHT_PREFIX  "homeassistant/light/"
@@ -138,6 +138,18 @@ void setup() {
 
   setup_wifi();
 
+  IPAddress result;
+  int err = WiFi.hostByName(MQTT_SERVER, result) ;
+  if(err == 1){
+        Serial.print("MQTT Server IP address: ");
+        Serial.println(result);
+        MQTTServerIP = result.toString();
+  } else {
+        Serial.print("Error code: ");
+        Serial.println(err);
+  }  
+
+  client.setBufferSize(512);  
   client.setServer(MQTT_SERVER, MQTT_SSL_PORT); //8883 is the port number you have forwared for mqtt messages. You will need to change this if you've used a different port
   client.setCallback(callback); //callback is the function that gets called for a topic sub
 
@@ -243,12 +255,18 @@ void loop() {
 
 }
 
-void callback(char* topic, byte* payload, unsigned int length) {
+void callback(char* p_topic, byte* p_payload, unsigned int p_length) {
+  String payload;
+
+  for (uint8_t i = 0; i < p_length; i++) {
+    payload.concat((char)p_payload[i]);
+  }
+ 
   //if the 'garage/button' topic has a payload "OPEN", then 'click' the relay
-  payload[length] = '\0';
-  strTopic = String((char*)topic);
+  p_payload[p_length] = '\0';
+  strTopic = String((char*)p_topic);
   if (strTopic == coverCommandTopic) {
-    switch1 = String((char*)payload);
+    switch1 = String((char*)p_payload);
     if (switch1 == "open") {
       //'click' the relay
       digitalWrite(DOOR_RELAY_PIN, HIGH);
@@ -257,7 +275,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     }
   }
   if (strTopic == ligthCommandTopic) {
-    switch1 = String((char*)payload);
+    switch1 = String((char*)p_payload);
     if ((switch1 == "ON") || (switch1 == "OFF")) {
       //'click' the relay
       digitalWrite(LIGHT_RELAY_PIN, HIGH);
@@ -267,7 +285,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
   if (strTopic == MQTT_HEARTBEAT_TOPIC) {
     resetWatchdog();
-    updateTelemetry(String((char*)payload));
+    updateTelemetry(String((char*)p_payload));
+    if (payload.equals(String(MQTT_UPDATE_REQUEST))) {
+      checkForUpdates();
+    }    
   }
 }
 
@@ -393,7 +414,6 @@ void updateBinarySensor(String sensor, String state) {
 void createLight(String light, String light_name) {
   String topic = String(MQTT_DISCOVERY_LIGHT_PREFIX) + light + "/config";
   String message = String("{\"name\": \"") + light_name +
-                   String("\", \"retain\": \"true") +
                    String("\", \"unique_id\": \"") + light + getUUID() +
                    String("\", \"optimistic\": \"false") +
                    String("\", \"command_topic\": \"") + String(MQTT_DISCOVERY_LIGHT_PREFIX) + light +
