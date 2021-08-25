@@ -17,7 +17,7 @@ const char compile_date[] = __DATE__ " " __TIME__;
 #define DOOR_OPEN_TIME_SEC 15
 #define RELAY_DELAY 600
 #define LIGHT_ON_THRESHOLD 75
-#define FIRMWARE_VERSION "-2.00"
+#define FIRMWARE_VERSION "-2.01"
 #define ENABLE_TEMP_MONITOR 1
 
 /****************************** MQTT TOPICS (change these topics as you wish)  ***************************************/
